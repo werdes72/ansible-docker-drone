@@ -1,0 +1,79 @@
+---
+# Install docker and launch drone.io
+
+- name: Configure server
+  hosts: all
+  vars:
+    drone_github_client_id: your_id
+    drone_github_client_secret: your_secret
+    drone_server_host: drone.example.com
+    proxy_pass: other_nginx_or_app
+    drone_server_proto: http
+    proxy_drone_pass: drone
+  tasks:
+    - name: Install docker repository requirements
+      apt: name={{item}} state=present update_cache=yes
+      with_items:
+        - apt-transport-https
+        - ca-certificates
+        - curl
+        - gnupg2
+        - software-properties-common
+    - name: Add docker apt key
+      apt_key:
+        url: https://download.docker.com/linux/debian/gpg
+        state: present
+    - name: Add docker repository
+      apt_repository:
+        repo: deb https://download.docker.com/linux/debian stretch stable
+        state: present
+    - name: Install docker-ce
+      apt: name=docker-ce state=present update_cache=yes
+    - name: Ensure docker group exists
+      group:
+        name: docker
+        state: present
+    - name: Add admin to docker group
+      user:
+        name: admin
+        groups: docker
+        append: yes
+    - name: Pull drone image
+      command: docker pull drone/drone:1.0.0-rc.3
+    - name: Run drone image
+      command: docker run
+        --volume=/var/run/docker.sock:/var/run/docker.sock
+        --volume=/var/lib/drone:/data
+        --env=DRONE_GITHUB_SERVER=https://github.com
+        --env=DRONE_GITHUB_CLIENT_ID={{ drone_github_client_id }}
+        --env=DRONE_GITHUB_CLIENT_SECRET={{ drone_github_client_secret }}
+        --env=DRONE_RUNNER_CAPACITY=1
+        --env=DRONE_SERVER_HOST={{ drone_server_host }}
+        --env=DRONE_SERVER_PROTO={{ drone_server_proto }}
+        --restart=always
+        --detach=true
+        --name=drone
+        --network=ng
+        drone/drone:1.0.0-rc.3
+    - name: Copy Dockerfile for nginx
+      copy:
+        src: nginx/Dockerfile
+        dest: ~/nginx/
+        owner: admin
+        group: docker
+        mode: 0644
+    - name: Copy nginx config
+      template:
+        src: nginx/nginx.conf
+        dest: ~/nginx/nginx.conf
+        owner: admin
+        group: docker
+        mode: 0644
+    - name: Create internal docker network
+      command: docker network create ng
+    - name: Build nginx container
+      command: docker build -t ng .
+      args:
+        chdir: ~/nginx/
+    - name: Run nginx container
+      command: docker run --name ng -p 80:80 -p 443:443 --network ng -d ng
